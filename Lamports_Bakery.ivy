@@ -1,0 +1,396 @@
+#lang ivy1.7
+#
+# 1  : choose[i] := true
+# 2  : for j := 1..N: 
+# 3  : 		max = max(number[i],number[j])
+# 4  : number[i] := max
+# 5  : choose[i] := false
+# 6  : for j := 1..N:
+# 7  :     while choose[j] do skip
+# 8  :     while number[j] > 0 and (number[j], j) < (number[i], i) do skip
+# 9  : critical section
+# 10 : number[i] := 0;    goto 1
+#      
+#
+# The original proof make no assumptions about the value read during an overlapping 
+# read and write to the same memory location. In order to simulate an overlapping 
+# read and write, we modeled 'write' action as non-atomic action without time 
+# commitment and without any assumptions on read value until 'write' finish
+#
+#
+# 1 : while * choose[i] := *;
+#     choose[i] := true;
+# 2  : for j := 1..N: 
+# 3  : 		max = max(number[i],number[j])
+# 4  : while * 	number[i] := * ;       
+#      number[i] := max+1 ;
+# 5  : while * choose[i] := *;
+#      choose[i] := false; 
+# 6  : for j := 1..N:
+# 7  :     while choose[j] do skip
+# 8  :     while number[j] > 0 and (number[j], j) < (number[i], i) do skip
+# 9  : critical section
+# 10 : while * number[i] := *;
+#      number[i] := 0; goto 1
+#     
+
+type process
+type number
+individual zero:number
+
+axiom (P1:process <= P2:process | P2 <= P1)
+axiom (P1:process <= P2:process & P2 <= P3:process) -> (P1 <= P3)
+axiom (P1:process <= P2:process & P2 <= P1) -> (P1=P2)
+
+axiom (N:number <= M:number | M<=N)
+axiom (N:number <= M:number & M <= K:number) -> (N <= K)
+axiom (N:number <= M:number & M <= N) -> (N = M)
+axiom (zero <= N:number )
+
+relation loop(P:process)
+relation check_max(P1:process, P2:process)
+relation max(P:process, N:number)
+
+relation check_now(P1:process, P2:process)
+relation checked(P1:process, P2:process)
+
+relation doorway(P:process)
+relation choosing(P:process)
+relation q_number(P:process, N:number)
+
+relation st1(P:process)
+relation st2(P:process)
+relation st3(P:process)
+relation st4(P:process)
+relation st5(P:process)
+relation st6(P:process)
+relation st7(P:process)
+relation st8(P:process)
+relation st9(P:process)
+relation st10(P:process)
+
+
+
+after init {
+
+	loop(P) := false;
+
+	choosing(P):= false;
+	q_number(P, N) :=  N = zero;	
+	
+	doorway(P) := false;
+
+	check_max(P, P1) := P1 = P;
+	max(P, N)  :=  N = zero;
+
+	check_now(P, P1) := P1 = P;
+	checked(P, P1) := false;
+	
+   	st1(P)  := true;
+  	st2(P)  := false;
+   	st3(P)  := false;
+   	st4(P)  := false;
+   	st5(P)  := false;  	
+   	st6(P)  := false;
+   	st7(P)  := false;  	
+   	st8(P)  := false;
+   	st9(P)  := false;
+   	st10(P) := false;	
+}
+
+
+
+#
+# 1 : while * choose[i] := *;
+#     choose[i] := true; 
+#
+action stage_1(p:process) = {
+	
+	require st1(p);
+	require ~loop(p);	
+	
+	choosing(p):= *;
+	if *{           
+		loop(p):= true;
+	}else{
+		choosing(p) := true;          
+		doorway(p) := true;
+		st1(p) := false;
+		st2(p) := true;
+	};
+}
+export stage_1
+
+
+
+#
+# 2  : for j := 1..N: 
+# 3  : 		max = max(number[i],number[j])   
+# 
+action stage_2(p:process) = {
+	
+	require st2(p);
+	require ~loop(p);
+
+	if check_max(p, P1){ 
+		st2(p) := false;
+		st4(p) := true;
+	}else{
+		st2(p) := false;
+		st3(p) := true;
+	};
+}
+export stage_2
+ 	
+
+	
+#
+# 2  : for j := 1..N: 
+# 3  : 		max = max(number[i],number[j])   
+# 
+action stage_3(p1:process, p2:process, n1:number, n2:number) = {
+	
+	require st3(p1);
+	require ~loop(p1);
+
+	require ~check_max(p1, p2);
+	require max(p1,n1);	
+	require q_number(p2,n2);	
+	
+	if n1<=n2 {
+		max(p1,M) := M = n2
+	} else {
+		max(p1,M) := M = n1
+	};
+	check_max(p1, p2):= true;
+	st3(p1) := false;
+	st2(p1) := true;
+}
+export stage_3
+
+#
+# 4  : while * 	number[i] := * ;       
+#      number[i] := max+1 ;
+# 
+action stage_4(p:process, n:number, n1:number ) = {
+	
+	require st4(p);
+	require ~loop(p);
+
+	require max(p,n);
+	require ~n1<=n;
+	require forall N2. ~N2<=n -> n1<=N2 ;      # n1 = n+1
+
+	var temp : number;
+	temp := *;
+	q_number(p,N) := N = temp;
+	
+	if *{
+		loop(p) := true;
+	} else {
+		q_number(p,N) := N = n1;
+		check_max(p,P1) := P1 = p;
+		doorway(p) := false;	
+		st4(p) := false;
+		st5(p) := true;
+	};
+}
+export stage_4
+
+#
+# 5 : while * choose[i] := *;
+#     choose[i] := false; 
+#
+action stage_5(p:process) = {
+	
+	require st5(p);
+	require ~loop(p);
+	
+	choosing(p):= *;        
+	if *{           
+		loop(p) := true;
+	}else{
+		choosing(p) := false;
+		checked(p,P1)   := P1 = p;
+		check_now(p,P1) := P1 = p;
+		st5(p) := false;
+		st6(p) := true;
+	};	
+}
+export stage_5
+
+
+#
+# 6: for j := 1..N:
+# 7:     while choose[j] do skip
+# 8:     while (  number[j]>0 and (number[j], j) < (number[i], i) ) do skip
+#
+action stage_6(p1:process, p2:process) = {
+	
+	require st6(p1);
+	require ~loop(p1);
+
+	if checked(p1, P){	
+		st6(p1) := false;
+		st9(p1) := true;
+	}else{
+		require ~checked(p1,p2);
+		check_now(p1, P) := P = p2;
+		st6(p1) := false;
+		st7(p1) := true;
+    	};
+}
+export stage_6
+
+
+#
+# 6: for j := 1..N:
+# 7:     while choose[j] do skip
+# 8:     while ( number[j]>0 and (number[j], j)<(number[i], i) ) do skip
+#
+action stage_7(p1:process, p2:process) = {
+	
+	require st7(p1);
+	require ~loop(p1);
+	require check_now(p1, p2);
+
+	if choosing(p2) {
+		loop(p1) := true;     		
+  	}else{
+		st7(p1) := false;
+		st8(p1) := true;
+	}; 
+}
+export stage_7
+
+
+#
+# 6: for j := 1..N:
+# 7:     while choose[j] do skip
+# 8:     while ( number[j] > 0 and (number[j], j) < (number[i], i) )  do skip
+#
+action stage_8(p1:process, p2:process, n1:number, n2:number) = {
+	require st8(p1) ;
+	require ~loop(p1);
+	require p1 ~= p2;
+ 	require check_now(p1, p2);
+	require q_number(p1, n1);
+	require q_number(p2, n2);
+
+	if ( ~n2<=n1 |  ( n1=n2 & p1<=p2 ) | n2=zero ) {
+		check_now(p1, P) := P = p1;			
+		checked(p1, p2) := true;
+		st8(p1) := false;
+		st6(p1) := true;	
+	}else{
+		loop(p1) := true;
+   	};
+}
+export stage_8
+
+
+
+#
+# 9: critical section
+#
+action stage_9(p:process) = {
+	
+	require st9(p);
+	require ~loop(p);
+	
+	checked(p, P) := P = p;	
+	st9(p) := false;
+	st10(p) := true;
+}
+export stage_9
+
+
+#
+# 10 :  while * number[i] := *;
+#	number[i] := 0; 
+#	goto 1
+#
+action stage_10(p: process) = {
+	
+	require st10(p);
+	require ~loop(p);
+
+	var temp: number;
+	temp:=*;
+	q_number(p,N) := N = temp;
+	
+	if *{           
+		loop(p) := true;
+	}else{
+		q_number(p, N) := N = zero;
+		max(p, N) :=  N = zero;
+		st10(p) := false;
+		st1(p) := true;
+	};
+}
+export stage_10
+
+
+action loop_stage(p:process) = {	
+	require loop(p);
+	loop(p):= false;	
+}
+export loop_stage
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+invariant [1] forall P1:process. doorway(P1) <-> (st2(P1)|st3(P1)|st4(P1))
+invariant [2] forall P1:process. doorway(P1)  -> choosing(P1) 
+invariant [3] forall P1:process. (check_max(P1,P2) & P1~=P2) ->  doorway(P1)
+
+invariant [4] forall P1:process. (st1(P1) & q_number(P1,N) & max(P1,M)) -> ( N=M &  M=zero )
+invariant [5] forall P1:process. ( (st5(P1)|st6(P1)|st7(P1)|st8(P1)|st9(P1)) & max(P1,M) & q_number(P1,N) ) -> ( ~N<=M  )
+
+invariant [6] forall P1:process, P2:process. st4(P1) -> check_max(P1,P2)
+
+invariant [7] forall P1:process. (P1~=P2 & checked(P1,P2) & q_number(P1,N1) & q_number(P2,N2) &  doorway(P2) & max(P2,M2)) -> ( ~check_max(P2,P1) |(check_max(P2,P1)& N1<=M2) )
+invariant [8] forall P1:process. (P1~=P2 & checked(P1,P2) & q_number(P1,N1) & q_number(P2,N2) & ~doorway(P2) ) -> ( (N1=N2 & P1<=P2) | ~N2<=N1 | N2=zero |st10(P2) )
+invariant [9] forall P1:process. (P1~=P2 & check_now(P1,P2) & st8(P1) & doorway(P2) & q_number(P1,N1) & q_number(P2,N2) & max(P2,M2) )->(~check_max(P2,P1) & N2=zero)|(check_max(P2,P1) & N1<=M2)
+
+invariant [10] forall P1:process, P2:process. (P1~=P2 & checked(P1,P2)) -> (st6(P1)|st7(P1)|st8(P1)|st9(P1))
+invariant [11] forall P1:process, P2:process. st9(P1) -> checked(P1,P2)
+invariant [mutual_exclusion] forall P1:process, P2:process. ( st9(P1) & st9(P2) ) -> (P1 = P2)
+
+invariant [unique_check_now] forall P1:process. (check_now(P1,P2) & check_now(P1,P3) )->(P2=P3)
+
+invariant [at_least_one_max]  forall P:process. exists N:number. max(P, N) 
+invariant [the_most_one_max]  forall P:process, N1:number, N2:number.(max(P,N1) & max(P,N2)) -> N1=N2 
+
+invariant [at_least_one_number]  forall P:process. exists N:number. q_number(P, N) 
+invariant [the_most_one_number]  forall P:process, N:number, M:number.(q_number(P, N) & q_number(P,M)) -> N=M 
+
+invariant [at_least_one_stage]   forall P:process.( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st1]  forall P.(st1(P)) -> ~( st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st2]  forall P.(st2(P)) -> ~( st1(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st3]  forall P.(st3(P)) -> ~( st1(P)|st2(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st4]  forall P.(st4(P)) -> ~( st1(P)|st2(P)|st3(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st5]  forall P.(st5(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st6(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st6]  forall P.(st6(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st7(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st7]  forall P.(st7(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st8(P)|st9(P)|st10(P) )
+invariant [if_st8]  forall P.(st8(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st9(P)|st10(P) )
+invariant [if_st9]  forall P.(st9(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st10(P) )
+invariant [if_st10] forall P.(st10(P)) -> ~( st1(P)|st2(P)|st3(P)|st4(P)|st5(P)|st6(P)|st7(P)|st8(P)|st9(P) )
+
+#invariant false
+
+
+
